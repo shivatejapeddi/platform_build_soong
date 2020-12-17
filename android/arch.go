@@ -127,6 +127,7 @@ var archVariants = map[ArchType][]string{
 		"cortex-a76",
 		"krait",
 		"kryo",
+		"kryo300",
 		"kryo385",
 		"exynos-m1",
 		"exynos-m2",
@@ -141,6 +142,7 @@ var archVariants = map[ArchType][]string{
 		"cortex-a75",
 		"cortex-a76",
 		"kryo",
+		"kryo300",
 		"kryo385",
 		"exynos-m1",
 		"exynos-m2",
@@ -192,6 +194,7 @@ var archVariants = map[ArchType][]string{
 var archFeatures = map[ArchType][]string{
 	Arm: {
 		"neon",
+		"aarch32",
 	},
 	Mips: {
 		"dspr2",
@@ -234,9 +237,11 @@ var archFeatureMap = map[ArchType]map[string][]string{
 		},
 		"armv8-a": {
 			"neon",
+			"aarch32",
 		},
 		"armv8-2a": {
 			"neon",
+			"aarch32",
 		},
 	},
 	Mips: {
@@ -1650,6 +1655,7 @@ func getMegaDeviceConfig() []archConfig {
 		{"arm", "armv7-a-neon", "cortex-a76", []string{"armeabi-v7a"}},
 		{"arm", "armv7-a-neon", "krait", []string{"armeabi-v7a"}},
 		{"arm", "armv7-a-neon", "kryo", []string{"armeabi-v7a"}},
+		{"arm", "armv7-a-neon", "kryo300", []string{"armeabi-v7a"}},
 		{"arm", "armv7-a-neon", "kryo385", []string{"armeabi-v7a"}},
 		{"arm", "armv7-a-neon", "exynos-m1", []string{"armeabi-v7a"}},
 		{"arm", "armv7-a-neon", "exynos-m2", []string{"armeabi-v7a"}},
@@ -1661,6 +1667,7 @@ func getMegaDeviceConfig() []archConfig {
 		{"arm64", "armv8-a", "exynos-m2", []string{"arm64-v8a"}},
 		{"arm64", "armv8-2a", "cortex-a75", []string{"arm64-v8a"}},
 		{"arm64", "armv8-2a", "cortex-a76", []string{"arm64-v8a"}},
+		{"arm64", "armv8-2a", "kryo300", []string{"arm64-v8a"}},
 		{"arm64", "armv8-2a", "kryo385", []string{"arm64-v8a"}},
 		{"mips", "mips32-fp", "", []string{"mips"}},
 		{"mips", "mips32r2-fp", "", []string{"mips"}},

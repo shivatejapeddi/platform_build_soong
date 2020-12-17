@@ -984,6 +984,13 @@ func (c *deviceConfig) VendorPath() string {
 	return "vendor"
 }
 
+func (c *deviceConfig) VendorOverlayPath() string {
+        if c.config.productVariables.VendorOverlayPath != nil {
+                return *c.config.productVariables.VendorOverlayPath
+        }
+        return "vendor_overlay"
+}
+
 func (c *deviceConfig) VndkVersion() string {
 	return String(c.config.productVariables.DeviceVndkVersion)
 }
@@ -1183,6 +1190,27 @@ func (c *config) IntegerOverflowDisabledForPath(path string) bool {
 		return false
 	}
 	return HasAnyPrefix(path, c.productVariables.IntegerOverflowExcludePaths)
+}
+
+func (c *config) IntegerOverflowEnabledForPath(path string) bool {
+	if c.productVariables.IntegerOverflowIncludePaths == nil {
+		return false
+	}
+	return HasAnyPrefix(path, c.productVariables.IntegerOverflowIncludePaths)
+}
+
+func (c *config) BoundSanitizerEnabledForPath(path string) bool {
+	if c.productVariables.BoundSanitizerIncludePaths == nil {
+		return false
+	}
+	return HasAnyPrefix(path, c.productVariables.BoundSanitizerIncludePaths)
+}
+
+func (c *config) BoundSanitizerDisabledForPath(path string) bool {
+	if c.productVariables.BoundSanitizerExcludePaths == nil {
+		return false
+	}
+	return HasAnyPrefix(path, c.productVariables.BoundSanitizerExcludePaths)
 }
 
 func (c *config) CFIDisabledForPath(path string) bool {

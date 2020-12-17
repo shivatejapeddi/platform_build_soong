@@ -183,6 +183,7 @@ type Flags struct {
 	SystemIncludeFlags []string
 
 	Toolchain    config.Toolchain
+	Sdclang      bool
 	Tidy         bool
 	GcovCoverage bool
 	SAbiDump     bool
@@ -209,6 +210,9 @@ type BaseProperties struct {
 	// Deprecated. true is the default, false is invalid.
 	Clang *bool `android:"arch_variant"`
 
+	// compile module with SDLLVM instead of AOSP LLVM
+	Sdclang *bool `android:"arch_variant"`
+
 	// Minimum sdk version supported when compiling against the ndk. Setting this property causes
 	// two variants to be built, one for the platform and one for apps.
 	Sdk_version *string
@@ -223,6 +227,7 @@ type BaseProperties struct {
 	AndroidMkStaticLibs       []string `blueprint:"mutated"`
 	AndroidMkRuntimeLibs      []string `blueprint:"mutated"`
 	AndroidMkWholeStaticLibs  []string `blueprint:"mutated"`
+	AndroidMkHeaderLibs       []string `blueprint:"mutated"`
 	HideFromMake              bool     `blueprint:"mutated"`
 	PreventInstall            bool     `blueprint:"mutated"`
 	ApexesProvidingSharedLibs []string `blueprint:"mutated"`
@@ -270,6 +275,13 @@ type BaseProperties struct {
 	// Set when both SDK and platform variants are exported to Make to trigger renaming the SDK
 	// variant to have a ".sdk" suffix.
 	SdkAndPlatformVariantVisibleToMake bool `blueprint:"mutated"`
+
+	// Normally Soong uses the directory structure to decide which modules
+	// should be included (framework) or excluded (non-framework) from the
+	// vendor snapshot, but this property allows a partner to exclude a
+	// module normally thought of as a framework module from the vendor
+	// snapshot.
+	Exclude_from_vendor_snapshot *bool
 }
 
 type VendorProperties struct {
@@ -930,48 +942,6 @@ func (c *Module) getVndkExtendsModuleName() string {
 	return ""
 }
 
-// Returns true only when this module is configured to have core, product and vendor
-// variants.
-func (c *Module) HasVendorVariant() bool {
-	return c.IsVndk() || Bool(c.VendorProperties.Vendor_available)
-}
-
-const (
-	// VendorVariationPrefix is the variant prefix used for /vendor code that compiles
-	// against the VNDK.
-	VendorVariationPrefix = "vendor."
-
-	// ProductVariationPrefix is the variant prefix used for /product code that compiles
-	// against the VNDK.
-	ProductVariationPrefix = "product."
-)
-
-// Returns true if the module is "product" variant. Usually these modules are installed in /product
-func (c *Module) inProduct() bool {
-	return c.Properties.ImageVariationPrefix == ProductVariationPrefix
-}
-
-// Returns true if the module is "vendor" variant. Usually these modules are installed in /vendor
-func (c *Module) inVendor() bool {
-	return c.Properties.ImageVariationPrefix == VendorVariationPrefix
-}
-
-func (c *Module) InRamdisk() bool {
-	return c.ModuleBase.InRamdisk() || c.ModuleBase.InstallInRamdisk()
-}
-
-func (c *Module) InRecovery() bool {
-	return c.ModuleBase.InRecovery() || c.ModuleBase.InstallInRecovery()
-}
-
-func (c *Module) OnlyInRamdisk() bool {
-	return c.ModuleBase.InstallInRamdisk()
-}
-
-func (c *Module) OnlyInRecovery() bool {
-	return c.ModuleBase.InstallInRecovery()
-}
-
 func (c *Module) IsStubs() bool {
 	if library, ok := c.linker.(*libraryDecorator); ok {
 		return library.buildStubs()
@@ -1045,6 +1015,10 @@ func (c *Module) ExportedGeneratedHeaders() android.Paths {
 	return nil
 }
 
+func (c *Module) ExcludeFromVendorSnapshot() bool {
+	return Bool(c.Properties.Exclude_from_vendor_snapshot)
+}
+
 func isBionic(name string) bool {
 	switch name {
 	case "libc", "libm", "libdl", "libdl_android", "linker":
@@ -1077,16 +1051,6 @@ type depsContext struct {
 type moduleContext struct {
 	android.ModuleContext
 	moduleContextImpl
-}
-
-func (ctx *moduleContext) ProductSpecific() bool {
-	return ctx.ModuleContext.ProductSpecific() ||
-		(ctx.mod.HasVendorVariant() && ctx.mod.inProduct() && !ctx.mod.IsVndk())
-}
-
-func (ctx *moduleContext) SocSpecific() bool {
-	return ctx.ModuleContext.SocSpecific() ||
-		(ctx.mod.HasVendorVariant() && ctx.mod.inVendor() && !ctx.mod.IsVndk())
 }
 
 type moduleContextImpl struct {
@@ -1182,22 +1146,6 @@ func (ctx *moduleContextImpl) isVndkExt() bool {
 
 func (ctx *moduleContextImpl) mustUseVendorVariant() bool {
 	return ctx.mod.MustUseVendorVariant()
-}
-
-func (ctx *moduleContextImpl) inProduct() bool {
-	return ctx.mod.inProduct()
-}
-
-func (ctx *moduleContextImpl) inVendor() bool {
-	return ctx.mod.inVendor()
-}
-
-func (ctx *moduleContextImpl) inRamdisk() bool {
-	return ctx.mod.InRamdisk()
-}
-
-func (ctx *moduleContextImpl) inRecovery() bool {
-	return ctx.mod.InRecovery()
 }
 
 // Check whether ABI dumps should be created for this module.
@@ -1466,6 +1414,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	flags := Flags{
 		Toolchain: c.toolchain(ctx),
 		EmitXrefs: ctx.Config().EmitXrefRules(),
+		Sdclang:   c.sdclang(ctx),
 	}
 	if c.compiler != nil {
 		flags = c.compiler.compilerFlags(ctx, flags, deps)
@@ -2175,6 +2124,21 @@ func checkDoubleLoadableLibraries(ctx android.TopDownMutatorContext) {
 	}
 }
 
+func (c *Module) sdclang(ctx BaseModuleContext) bool {
+	sdclang := Bool(c.Properties.Sdclang)
+
+	// SDLLVM is not for host build
+	if ctx.Host() || config.ForceSDClangOff {
+		return false
+	}
+
+	if c.Properties.Sdclang == nil && config.SDClang {
+		return true
+	}
+
+	return sdclang
+}
+
 // Convert dependencies to paths.  Returns a PathDeps containing paths
 func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	var depPaths PathDeps
@@ -2611,6 +2575,9 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		case wholeStaticDepTag:
 			c.Properties.AndroidMkWholeStaticLibs = append(
 				c.Properties.AndroidMkWholeStaticLibs, makeLibName(depName))
+		case headerDepTag:
+			c.Properties.AndroidMkHeaderLibs = append(
+				c.Properties.AndroidMkHeaderLibs, makeLibName(depName))
 		}
 	})
 
@@ -2941,227 +2908,6 @@ func squashRecoverySrcs(m *Module) {
 
 		lib.baseCompiler.Properties.Exclude_srcs = append(lib.baseCompiler.Properties.Exclude_srcs,
 			lib.baseCompiler.Properties.Target.Recovery.Exclude_srcs...)
-	}
-}
-
-var _ android.ImageInterface = (*Module)(nil)
-
-func (m *Module) ImageMutatorBegin(mctx android.BaseModuleContext) {
-	// Sanity check
-	vendorSpecific := mctx.SocSpecific() || mctx.DeviceSpecific()
-	productSpecific := mctx.ProductSpecific()
-
-	if m.VendorProperties.Vendor_available != nil && vendorSpecific {
-		mctx.PropertyErrorf("vendor_available",
-			"doesn't make sense at the same time as `vendor: true`, `proprietary: true`, or `device_specific:true`")
-	}
-
-	if vndkdep := m.vndkdep; vndkdep != nil {
-		if vndkdep.isVndk() {
-			if vendorSpecific || productSpecific {
-				if !vndkdep.isVndkExt() {
-					mctx.PropertyErrorf("vndk",
-						"must set `extends: \"...\"` to vndk extension")
-				} else if m.VendorProperties.Vendor_available != nil {
-					mctx.PropertyErrorf("vendor_available",
-						"must not set at the same time as `vndk: {extends: \"...\"}`")
-				}
-			} else {
-				if vndkdep.isVndkExt() {
-					mctx.PropertyErrorf("vndk",
-						"must set `vendor: true` or `product_specific: true` to set `extends: %q`",
-						m.getVndkExtendsModuleName())
-				}
-				if m.VendorProperties.Vendor_available == nil {
-					mctx.PropertyErrorf("vndk",
-						"vendor_available must be set to either true or false when `vndk: {enabled: true}`")
-				}
-			}
-		} else {
-			if vndkdep.isVndkSp() {
-				mctx.PropertyErrorf("vndk",
-					"must set `enabled: true` to set `support_system_process: true`")
-			}
-			if vndkdep.isVndkExt() {
-				mctx.PropertyErrorf("vndk",
-					"must set `enabled: true` to set `extends: %q`",
-					m.getVndkExtendsModuleName())
-			}
-		}
-	}
-
-	var coreVariantNeeded bool = false
-	var ramdiskVariantNeeded bool = false
-	var recoveryVariantNeeded bool = false
-
-	var vendorVariants []string
-	var productVariants []string
-
-	platformVndkVersion := mctx.DeviceConfig().PlatformVndkVersion()
-	boardVndkVersion := mctx.DeviceConfig().VndkVersion()
-	productVndkVersion := mctx.DeviceConfig().ProductVndkVersion()
-	if boardVndkVersion == "current" {
-		boardVndkVersion = platformVndkVersion
-	}
-	if productVndkVersion == "current" {
-		productVndkVersion = platformVndkVersion
-	}
-
-	if boardVndkVersion == "" {
-		// If the device isn't compiling against the VNDK, we always
-		// use the core mode.
-		coreVariantNeeded = true
-	} else if _, ok := m.linker.(*llndkStubDecorator); ok {
-		// LL-NDK stubs only exist in the vendor and product variants,
-		// since the real libraries will be used in the core variant.
-		vendorVariants = append(vendorVariants,
-			platformVndkVersion,
-			boardVndkVersion,
-		)
-		productVariants = append(productVariants,
-			platformVndkVersion,
-			productVndkVersion,
-		)
-	} else if _, ok := m.linker.(*llndkHeadersDecorator); ok {
-		// ... and LL-NDK headers as well
-		vendorVariants = append(vendorVariants,
-			platformVndkVersion,
-			boardVndkVersion,
-		)
-		productVariants = append(productVariants,
-			platformVndkVersion,
-			productVndkVersion,
-		)
-	} else if m.isSnapshotPrebuilt() {
-		// Make vendor variants only for the versions in BOARD_VNDK_VERSION and
-		// PRODUCT_EXTRA_VNDK_VERSIONS.
-		if snapshot, ok := m.linker.(interface {
-			version() string
-		}); ok {
-			vendorVariants = append(vendorVariants, snapshot.version())
-		} else {
-			mctx.ModuleErrorf("version is unknown for snapshot prebuilt")
-		}
-	} else if m.HasVendorVariant() && !m.isVndkExt() {
-		// This will be available in /system, /vendor and /product
-		// or a /system directory that is available to vendor and product.
-		coreVariantNeeded = true
-
-		// We assume that modules under proprietary paths are compatible for
-		// BOARD_VNDK_VERSION. The other modules are regarded as AOSP, or
-		// PLATFORM_VNDK_VERSION.
-		if isVendorProprietaryPath(mctx.ModuleDir()) {
-			vendorVariants = append(vendorVariants, boardVndkVersion)
-		} else {
-			vendorVariants = append(vendorVariants, platformVndkVersion)
-		}
-
-		// vendor_available modules are also available to /product.
-		productVariants = append(productVariants, platformVndkVersion)
-		// VNDK is always PLATFORM_VNDK_VERSION
-		if !m.IsVndk() {
-			productVariants = append(productVariants, productVndkVersion)
-		}
-	} else if vendorSpecific && String(m.Properties.Sdk_version) == "" {
-		// This will be available in /vendor (or /odm) only
-		// We assume that modules under proprietary paths are compatible for
-		// BOARD_VNDK_VERSION. The other modules are regarded as AOSP, or
-		// PLATFORM_VNDK_VERSION.
-		if isVendorProprietaryPath(mctx.ModuleDir()) {
-			vendorVariants = append(vendorVariants, boardVndkVersion)
-		} else {
-			vendorVariants = append(vendorVariants, platformVndkVersion)
-		}
-	} else {
-		// This is either in /system (or similar: /data), or is a
-		// modules built with the NDK. Modules built with the NDK
-		// will be restricted using the existing link type checks.
-		coreVariantNeeded = true
-	}
-
-	if boardVndkVersion != "" && productVndkVersion != "" {
-		if coreVariantNeeded && productSpecific && String(m.Properties.Sdk_version) == "" {
-			// The module has "product_specific: true" that does not create core variant.
-			coreVariantNeeded = false
-			productVariants = append(productVariants, productVndkVersion)
-		}
-	} else {
-		// Unless PRODUCT_PRODUCT_VNDK_VERSION is set, product partition has no
-		// restriction to use system libs.
-		// No product variants defined in this case.
-		productVariants = []string{}
-	}
-
-	if Bool(m.Properties.Ramdisk_available) {
-		ramdiskVariantNeeded = true
-	}
-
-	if m.ModuleBase.InstallInRamdisk() {
-		ramdiskVariantNeeded = true
-		coreVariantNeeded = false
-	}
-
-	if Bool(m.Properties.Recovery_available) {
-		recoveryVariantNeeded = true
-	}
-
-	if m.ModuleBase.InstallInRecovery() {
-		recoveryVariantNeeded = true
-		coreVariantNeeded = false
-	}
-
-	for _, variant := range android.FirstUniqueStrings(vendorVariants) {
-		m.Properties.ExtraVariants = append(m.Properties.ExtraVariants, VendorVariationPrefix+variant)
-	}
-
-	for _, variant := range android.FirstUniqueStrings(productVariants) {
-		m.Properties.ExtraVariants = append(m.Properties.ExtraVariants, ProductVariationPrefix+variant)
-	}
-
-	m.Properties.RamdiskVariantNeeded = ramdiskVariantNeeded
-	m.Properties.RecoveryVariantNeeded = recoveryVariantNeeded
-	m.Properties.CoreVariantNeeded = coreVariantNeeded
-}
-
-func (c *Module) CoreVariantNeeded(ctx android.BaseModuleContext) bool {
-	return c.Properties.CoreVariantNeeded
-}
-
-func (c *Module) RamdiskVariantNeeded(ctx android.BaseModuleContext) bool {
-	return c.Properties.RamdiskVariantNeeded
-}
-
-func (c *Module) RecoveryVariantNeeded(ctx android.BaseModuleContext) bool {
-	return c.Properties.RecoveryVariantNeeded
-}
-
-func (c *Module) ExtraImageVariations(ctx android.BaseModuleContext) []string {
-	return c.Properties.ExtraVariants
-}
-
-func (c *Module) SetImageVariation(ctx android.BaseModuleContext, variant string, module android.Module) {
-	m := module.(*Module)
-	if variant == android.RamdiskVariation {
-		m.MakeAsPlatform()
-	} else if variant == android.RecoveryVariation {
-		m.MakeAsPlatform()
-		squashRecoverySrcs(m)
-	} else if strings.HasPrefix(variant, VendorVariationPrefix) {
-		m.Properties.ImageVariationPrefix = VendorVariationPrefix
-		m.Properties.VndkVersion = strings.TrimPrefix(variant, VendorVariationPrefix)
-		squashVendorSrcs(m)
-
-		// Makefile shouldn't know vendor modules other than BOARD_VNDK_VERSION.
-		// Hide other vendor variants to avoid collision.
-		vndkVersion := ctx.DeviceConfig().VndkVersion()
-		if vndkVersion != "current" && vndkVersion != "" && vndkVersion != m.Properties.VndkVersion {
-			m.Properties.HideFromMake = true
-			m.SkipInstall()
-		}
-	} else if strings.HasPrefix(variant, ProductVariationPrefix) {
-		m.Properties.ImageVariationPrefix = ProductVariationPrefix
-		m.Properties.VndkVersion = strings.TrimPrefix(variant, ProductVariationPrefix)
-		squashVendorSrcs(m)
 	}
 }
 
